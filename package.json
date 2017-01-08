@@ -2,7 +2,7 @@
   "name": "telebot",
   "version": "1.0.6",
   "description": "Easy way to write Telegram bots.",
-  "main": "lib/telebot.js",
+  "main": "dist/telebot.js",
   "engines": {
     "node": ">= 6.0.0"
   },
