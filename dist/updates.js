@@ -1,131 +1,145 @@
 'use strict';
 
 // Command regexp
-
-var reCMD = /^\/([0-9а-я\w\d\_\-]+)/;
+const REGEXP_COMMAND = /^\/([0-9а-я\w\d_\-]+)/;
 
 // Message types
-var MESSAGE_TYPES = ['edit_date', 'text', 'audio', 'voice', 'document', 'photo', 'sticker', 'video', 'contact', 'location', 'venue', 'new_chat_member', 'left_chat_member', 'new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'group_chat_created', 'supergroup_chat_created', 'channel_chat_created', 'migrate_to_chat_id', 'migrate_from_chat_id', 'pinned_message'];
+const MESSAGE_TYPES = ['new_chat_members', 'left_chat_member', 'new_chat_title', 'new_chat_photo', 'delete_chat_photo', 'group_chat_created', 'supergroup_chat_created', 'channel_chat_created', 'migrate_to_chat_id', 'migrate_from_chat_id', 'pinned_message', 'edit_date', 'forward_date', 'text', 'audio', 'voice', 'document', 'photo', 'sticker', 'video', 'video_note', 'contact', 'location', 'venue', 'game', 'invoice', 'successful_payment'];
 
-var SHORTCUTS = {
-  edit_date: 'edited',
-  new_chat_member: 'userJoined',
-  left_chat_member: 'userLeft',
-  new_chat_title: 'newTitle',
-  new_chat_photo: 'newPhoto',
-  delete_chat_photo: 'deletePhoto',
-  pinned_message: 'pinnedMessage',
-  group_chat_created: 'groupCreated',
-  channel_chat_created: 'channelCreated',
-  supergroup_chat_created: 'supergroupCreated',
-  migrate_to_chat_id: 'migrateTo',
-  migrate_from_chat_id: 'migrateFrom'
+const SHORTCUTS = {
+    edit_date: 'edit',
+    video_note: 'videoNote',
+    forward_date: 'forward',
+    new_chat_members: 'newChatMembers',
+    left_chat_member: 'leftChatMember',
+    new_chat_title: 'newChatTitle',
+    new_chat_photo: 'newChatPhoto',
+    delete_chat_photo: 'deleteChatPhoto',
+    pinned_message: 'pinnedMessage',
+    group_chat_created: 'groupChatCreated',
+    channel_chat_created: 'channelChatCreated',
+    supergroup_chat_created: 'supergroupChatCreated',
+    migrate_to_chat_id: 'migrateToChat',
+    migrate_from_chat_id: 'migrateFromChat',
+    successful_payment: 'successfulPayment'
 };
 
 // Update type functions
-var updateFunctions = {
+const updateFunctions = {
 
-  // Message
-  message: function message(update, props) {
-    var _this = this;
+    // Message
+    message: function message(update, props) {
 
-    // Set promise
-    var promise = Promise.resolve();
+        // Any event status: ['*', '/*']
+        let anyEventFlags = [false, false];
 
-    // Run global message mod
-    var mod = this.modRun('message', { msg: update, props: props });
+        let promise = Promise.resolve();
+        let mod = this.modRun('message', { message: update, props: props });
 
-    update = mod.msg;
-    props = mod.props;
-
-    var _iteratorNormalCompletion = true;
-    var _didIteratorError = false;
-    var _iteratorError = undefined;
-
-    try {
-      for (var _iterator = MESSAGE_TYPES[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
-        var type = _step.value;
-
-
-        // Check for Telegram API documented types
-        if (!(type in update)) continue;
-
-        // Shortcut
-        if (SHORTCUTS[type]) type = SHORTCUTS[type];
-
-        // Set message type
-        props.type = type;
-
-        // Run message type mod
-        mod = this.modRun(type, { msg: update, props: props });
-
-        update = mod.msg;
+        update = mod.message;
         props = mod.props;
+        promise = promise.then(() => mod.promise);
 
-        // Send type event
-        promise = this.event(['*', type], update, props);
+        for (let type of MESSAGE_TYPES) {
 
-        // Check for command
-        if (type == 'text') {
-          var _ret = function () {
+            // Check for Telegram API documented types
+            if (!(type in update)) continue;
 
-            var match = reCMD.exec(update.text);
-            if (!match) return 'continue';
+            // Shortcut
+            if (SHORTCUTS[type]) type = SHORTCUTS[type];
 
-            // Command found
-            props.type = 'command';
-            promise = promise.then(function (x) {
-              return _this.event(['/*', '/' + match[1]], update, props);
+            // Set message type
+            props.type = type;
+
+            // Run message type mod
+            mod = this.modRun(type, { message: update, props: props });
+
+            update = mod.message;
+            props = mod.props;
+            promise = promise.then(() => mod.promise);
+
+            const eventList = [type];
+            if (!anyEventFlags[0]) {
+                eventList.push('*');
+                anyEventFlags[0] = true;
+            }
+
+            promise = promise.then(() => {
+                return this.event(eventList, update, props);
             });
-          }();
 
-          if (_ret === 'continue') continue;
+            // Check for command
+            if (type === 'text') {
+
+                const match = REGEXP_COMMAND.exec(update.text);
+                if (!match) continue;
+
+                // Command found
+                props.type = 'command';
+
+                const eventList = ['/' + match[1]];
+                if (!anyEventFlags[1]) {
+                    eventList.push(['/*']);
+                    anyEventFlags[1] = true;
+                }
+
+                promise = promise.then(() => {
+                    return this.event(eventList, update, props);
+                });
+            }
+
+            break;
         }
 
         return promise;
-      }
-    } catch (err) {
-      _didIteratorError = true;
-      _iteratorError = err;
-    } finally {
-      try {
-        if (!_iteratorNormalCompletion && _iterator.return) {
-          _iterator.return();
-        }
-      } finally {
-        if (_didIteratorError) {
-          throw _iteratorError;
-        }
-      }
+    },
+
+
+    // Channel post
+    channel_post: function channel_post(update, props) {
+        return updateFunctions.message.call(this, update, props);
+    },
+
+
+    // Edited hannel post
+    edited_channel_post: function edited_channel_post(update, props) {
+        return updateFunctions.message.call(this, update, props);
+    },
+
+
+    // Edited message
+    edited_message: function edited_message(update, props) {
+        return updateFunctions.message.call(this, update, props);
+    },
+
+
+    // Inline query
+    inline_query: function inline_query(update, props) {
+        props.type = 'inlineQuery';
+        return this.event('inlineQuery', update, props);
+    },
+
+
+    // Inline choice
+    chosen_inline_result: function chosen_inline_result(update, props) {
+        props.type = 'chosenInlineResult';
+        return this.event([props.type, 'inlineChoice'], update, props);
+    },
+
+
+    // Callback query
+    callback_query: function callback_query(update, props) {
+        props.type = 'callbackQuery';
+        return this.event('callbackQuery', update, props);
+    },
+    shipping_query: function shipping_query(update, props) {
+        props.type = 'shippingQuery';
+        return this.event('shippingQuery', update, props);
+    },
+    pre_checkout_query: function pre_checkout_query(update, props) {
+        props.type = 'preShippingQuery';
+        return this.event('preShippingQuery', update, props);
     }
-  },
-
-
-  // Edited message
-  edited_message: function edited_message(update, props) {
-    return updateFunctions.message.call(this, update, props);
-  },
-
-
-  // Inline query
-  inline_query: function inline_query(update, props) {
-    props.type = 'inlineQuery';
-    return this.event('inlineQuery', update, props);
-  },
-
-
-  // Inline choice
-  chosen_inline_result: function chosen_inline_result(update, props) {
-    props.type = 'inlineChoice';
-    return this.event('inlineChoice', update, props);
-  },
-
-
-  // Callback query
-  callback_query: function callback_query(update, props) {
-    props.type = 'callbackQuery';
-    return this.event('callbackQuery', update, props);
-  }
 };
 
 module.exports = updateFunctions;

@@ -1,356 +1,630 @@
 'use strict';
 
-var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+const fs = require('fs');
+const nurl = require('url');
+const path = require('path');
+const stream = require('stream');
+const request = require('request');
 
-function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
-
-function _defineProperty(obj, key, value) { if (key in obj) { Object.defineProperty(obj, key, { value: value, enumerable: true, configurable: true, writable: true }); } else { obj[key] = value; } return obj; }
-
-var fs = require('fs'),
-    nurl = require('url'),
-    path = require('path'),
-    stream = require('stream'),
-    request = require('request');
-
-var ANSWER_METHODS = {
-  addArticle: 'article', addPhoto: 'photo', addVideo: 'video',
-  addGif: 'gif', addVideoGif: 'mpeg4_gif', addSticker: 'sticker',
-  addVoice: 'voice', addDocument: 'document', addLocation: 'location',
-  addVenue: 'venue',
-  // Cached methods
-  cachedPhoto: 'photo', cachedGif: 'gif', cachedVideoGif: 'mpeg4_gif',
-  cachedSticker: 'sticker', cachedDocument: 'document', cachedVideo: 'video',
-  cachedVoice: 'voice', cachedAudio: 'audio'
+const ANSWER_METHODS = {
+    addArticle: 'article', addPhoto: 'photo', addVideo: 'video',
+    addGif: 'gif', addVideoGif: 'mpeg4_gif', addSticker: 'sticker',
+    addVoice: 'voice', addDocument: 'document', addLocation: 'location',
+    addVenue: 'venue', addGame: 'game',
+    cachedPhoto: 'photo', cachedGif: 'gif', cachedVideoGif: 'mpeg4_gif',
+    cachedSticker: 'sticker', cachedDocument: 'document', cachedVideo: 'video',
+    cachedVoice: 'voice', cachedAudio: 'audio'
 };
 
-var DEFAULT_FILE_EXTS = {
-  photo: 'jpg', audio: 'mp3', 'document': 'doc',
-  sticker: 'webp', voice: 'm4a', 'video': 'mp4'
+const DEFAULT_FILE_EXTENSIONS = {
+    photo: 'jpg', audio: 'mp3', document: 'doc',
+    sticker: 'webp', voice: 'm4a', video: 'mp4'
 };
 
-var reURL = /^https?\:\/\/|www\./;
+const REGEXP_URL = /^https?:\/\/|www\./;
 
 // Methods
-var methods = {
-  keyboard: function keyboard(_keyboard) {
-    var opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+const methods = {
+    keyboard: function keyboard(_keyboard) {
+        let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
 
-    var markup = { keyboard: _keyboard };
-    if (opt.resize === true) markup['resize_keyboard'] = true;
-    if (opt.once === true) markup['one_time_keyboard'] = true;
-    if (opt.selective) markup['selective'] = opt.selective;
-    return JSON.stringify(markup);
-  },
-  button: function button(type, text) {
-    if (!text && type) return { text: type };
-    type = 'request_' + type;
-    return _defineProperty({ text: text }, type, true);
-  },
-  inlineKeyboard: function inlineKeyboard(inline_keyboard) {
-    return JSON.stringify({ inline_keyboard: inline_keyboard });
-  },
-  inlineQueryKeyboard: function inlineQueryKeyboard(inline_keyboard) {
-    return { inline_keyboard: inline_keyboard };
-  },
-  inlineButton: function inlineButton(text) {
-    var opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
-    var markup = { text: text };
-    if (opt.url) markup.url = opt.url;
-    if (opt.inline || opt.inline === '') markup.switch_inline_query = opt.inline;
-    if (opt.callback) markup.callback_data = String(opt.callback);
-    return markup;
-  },
-  answerList: function answerList(id, opt) {
-    return new AnswerList(id, opt);
-  },
-
-
-  getMe: {
-    then: function then(data) {
-      return data.result;
-    }
-  },
-
-  sendMessage: {
-    arguments: ['chat_id', 'text']
-  },
-
-  forwardMessage: {
-    arguments: ['chat_id', 'from_chat_id', 'message_id']
-  },
-
-  sendPhoto: function sendPhoto(id, photo, opt) {
-    return sendFile.call(this, 'photo', id, photo, opt);
-  },
-  sendAudio: function sendAudio(id, audio, opt) {
-    return sendFile.call(this, 'audio', id, audio, opt);
-  },
-  sendDocument: function sendDocument(id, doc, opt) {
-    return sendFile.call(this, 'document', id, doc, opt);
-  },
-  sendSticker: function sendSticker(id, sticker, opt) {
-    return sendFile.call(this, 'sticker', id, sticker, opt);
-  },
-  sendVideo: function sendVideo(id, video, opt) {
-    return sendFile.call(this, 'video', id, video, opt);
-  },
-  sendVoice: function sendVoice(id, voice, opt) {
-    return sendFile.call(this, 'voice', id, voice, opt);
-  },
-
-
-  sendLocation: {
-    arguments: function _arguments(chat_id, position) {
-      return {
-        chat_id: chat_id, latitude: position[0], longitude: position[1]
-      };
-    }
-  },
-
-  sendVenue: {
-    arguments: function _arguments(chat_id, position, title, address) {
-      return {
-        chat_id: chat_id, latitude: position[0], longitude: position[1], title: title, address: address
-      };
+        const markup = _keyboard !== undefined ? { keyboard: _keyboard } : {};
+        if (opt.resize === true) markup['resize_keyboard'] = true;
+        if (opt.once === true) markup['one_time_keyboard'] = true;
+        if (opt.remove === true) markup['remove_keyboard'] = true;
+        if (opt.selective) markup['selective'] = opt.selective;
+        return markup;
     },
-    options: function options(form, opt) {
-      if (opt.foursquare) form.foursquare_id = opt.foursquare;
-      return form;
-    }
-  },
+    button: function button(type, text) {
+        if (!text && type) return { text: type };
+        type = `request_${type}`;
+        return { text: text, [type]: true };
+    },
+    inlineKeyboard: function inlineKeyboard(inline_keyboard) {
+        return { inline_keyboard: inline_keyboard };
+    },
+    inlineQueryKeyboard: function inlineQueryKeyboard(inline_keyboard) {
+        return { inline_keyboard: inline_keyboard };
+    },
+    inlineButton: function inlineButton(text) {
+        let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
 
-  sendContact: {
-    arguments: ['chat_id', 'phone_number', 'first_name', 'last_name']
-  },
+        const markup = { text: text };
+        if (opt.url) markup.url = opt.url;
+        if (opt.inline !== undefined) markup.switch_inline_query = opt.inline;
+        if (opt.inlineCurrent !== undefined) markup.switch_inline_query_current_chat = opt.inlineCurrent;
+        if (opt.callback) markup.callback_data = String(opt.callback);
+        if (opt.game) markup.callback_game = String(opt.game);
+        if (opt.pay === true) markup.pay = opt.pay;
+        return markup;
+    },
+    answerList: function answerList(id, opt) {
+        return new AnswerList(id, opt);
+    },
 
-  sendChatAction: {
-    short: 'sendAction',
-    arguments: ['chat_id', 'action']
-  },
 
-  getUserProfilePhotos: {
-    short: 'getUserPhoto',
-    arguments: 'chat_id',
-    options: function options(form, opt) {
-      if (opt.offset) form.offset = opt.offset;
-      if (opt.limit) form.limit = opt.limit;
-      return form;
-    }
-  },
+    getMe: {},
 
-  getFile: {
-    arguments: 'file_id',
-    then: function then(file) {
-      var result = file.result;
-      result.fileLink = undefined.fileLink + result.file_path;
-      return result;
-    }
-  },
+    sendMessage: {
+        arguments: ['chat_id', 'text']
+    },
 
-  getChat: {
-    arguments: ['chat_id']
-  },
+    forwardMessage: {
+        arguments: ['chat_id', 'from_chat_id', 'message_id']
+    },
 
-  leaveChat: {
-    arguments: ['chat_id']
-  },
+    sendPhoto: function sendPhoto(chat_id, photo, opt) {
+        return sendFile.call(this, 'photo', photo, opt, { chat_id: chat_id });
+    },
+    sendAudio: function sendAudio(chat_id, audio) {
+        let opt = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
 
-  getChatAdministrators: {
-    short: 'getAdmins',
-    arguments: ['chat_id']
-  },
+        const form = { chat_id: chat_id };
 
-  getChatMember: {
-    short: 'getMember',
-    arguments: ['chat_id', 'user_id']
-  },
+        if (opt.title) form.title = opt.title;
+        if (opt.performer) form.performer = opt.performer;
+        if (Number.isInteger(opt.duration)) form.duration = opt.duration;
 
-  getChatMembersCount: {
-    short: 'countMembers',
-    arguments: ['chat_id']
-  },
+        return sendFile.call(this, 'audio', audio, opt, form);
+    },
+    sendDocument: function sendDocument(chat_id, doc, opt) {
+        return sendFile.call(this, 'document', doc, opt, { chat_id: chat_id });
+    },
+    sendSticker: function sendSticker(chat_id, sticker, opt) {
+        return sendFile.call(this, 'sticker', sticker, opt, { chat_id: chat_id });
+    },
+    sendVideo: function sendVideo(chat_id, video) {
+        let opt = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
 
-  kickChatMember: {
-    short: 'kick',
-    arguments: ['chat_id', 'user_id']
-  },
+        const form = { chat_id: chat_id };
 
-  unbanChatMember: {
-    short: 'unban',
-    arguments: ['chat_id', 'user_id']
-  },
+        if (Number.isInteger(opt.duration)) form.duration = opt.duration;
+        if (Number.isInteger(opt.width)) form.width = opt.width;
+        if (Number.isInteger(opt.height)) form.height = opt.height;
 
-  answerInlineQuery: {
-    short: 'answerQuery',
-    arguments: function _arguments(answers) {
-      return {
-        inline_query_id: answers.id,
-        results: answers.results(),
-        next_offset: answers.nextOffset,
-        is_personal: answers.personal,
-        cache_time: answers.cacheTime
-      };
-    }
-  },
+        return sendFile.call(this, 'video', video, opt, form);
+    },
 
-  answerCallbackQuery: {
-    short: 'answerCallback',
-    arguments: ['callback_query_id', 'text', 'show_alert']
-  },
 
-  editMessageText: {
-    short: 'editText',
-    arguments: function _arguments(obj, text) {
-      return editObject(obj, { text: text });
-    }
-  },
+    sendVideoNote: {
+        arguments: ['chat_id', 'video_note'],
+        options: function options(form) {
+            let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
 
-  editMessageCaption: {
-    short: 'editCaption',
-    arguments: function _arguments(obj, caption) {
-      return editObject(obj, { caption: caption });
-    }
-  },
-
-  editMessageReplyMarkup: {
-    short: 'editMarkup',
-    arguments: function _arguments(obj, reply_markup) {
-      return editObject(obj, { reply_markup: reply_markup });
-    }
-  },
-
-  setWebhook: function setWebhook(url, certificate) {
-    if (certificate) {
-      var form = {
-        url: url,
-        certificate: {
-          value: fs.readFileSync(certificate),
-          options: { filename: 'cert.pem' }
+            if (Number.isInteger(opt.duration)) form.duration = opt.duration;
+            if (Number.isInteger(opt.length)) form.length = opt.length;
+            return form;
         }
-      };
-      return this.request('/setWebhook', null, form);
-    }
-    return this.request('/setWebhook', { url: url });
-  },
+    },
+
+    sendVoice: function sendVoice(chat_id, voice) {
+        let opt = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
+
+        const form = { chat_id: chat_id };
+
+        if (Number.isInteger(opt.duration)) form.duration = opt.duration;
+
+        return sendFile.call(this, 'voice', voice, opt, form);
+    },
 
 
-  getWebhookInfo: {
-    then: function then(data) {
-      return data.result;
-    }
-  }
+    sendLocation: {
+        arguments: function _arguments(chat_id, position) {
+            return {
+                chat_id: chat_id, latitude: position[0], longitude: position[1]
+            };
+        },
+        options: function options(form) {
+            let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+            if (Number.isInteger(opt.livePeriod)) form.live_period = opt.livePeriod;
+            return form;
+        }
+    },
+
+    editMessageLiveLocation: {
+        arguments: function _arguments() {
+            let opt = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+
+            const form = {};
+
+            if (opt.latitude) form.latitude = opt.latitude;
+            if (opt.longitude) form.longitude = opt.longitude;
+
+            if (opt.chatId) form.chat_id = opt.chatId;
+            if (opt.messageId) form.message_id = opt.messageId;
+            if (opt.inlineMessageId) form.inline_message_id = opt.inlineMessageId;
+
+            return form;
+        }
+    },
+
+    stopMessageLiveLocation: {
+        arguments: function _arguments() {
+            let opt = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+
+            const form = {};
+
+            if (opt.chatId) form.chat_id = opt.chatId;
+            if (opt.messageId) form.message_id = opt.messageId;
+            if (opt.inlineMessageId) form.inline_message_id = opt.inlineMessageId;
+
+            return form;
+        }
+    },
+
+    sendVenue: {
+        arguments: function _arguments(chat_id, position, title, address) {
+            return {
+                chat_id: chat_id, latitude: position[0], longitude: position[1], title: title, address: address
+            };
+        },
+        options: function options(form) {
+            let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+            if (opt.foursquareId) form.foursquare_id = opt.foursquareId;
+            return form;
+        }
+    },
+
+    sendContact: {
+        arguments: ['chat_id', 'phone_number', 'first_name', 'last_name']
+    },
+
+    sendChatAction: {
+        short: 'sendAction',
+        arguments: ['chat_id', 'action']
+    },
+
+    getUserProfilePhotos: {
+        short: 'getUserPhoto',
+        arguments: 'user_id',
+        options: function options(form) {
+            let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+            if (opt.offset) form.offset = opt.offset;
+            if (opt.limit) form.limit = opt.limit;
+            return form;
+        }
+    },
+
+    getFile: function getFile(file_id) {
+        return this.request(`/getFile`, { file_id: file_id }).then(file => {
+            const result = file.result;
+            result.fileLink = this.fileLink + result.file_path;
+            return result;
+        });
+    },
+
+
+    sendGame: {
+        arguments: ['chat_id', 'game_short_name']
+    },
+
+    setGameScore: {
+        arguments: ['user_id', 'score'],
+        options: function options(form) {
+            let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+            if (opt.force) form.force = opt.force;
+            if (opt.chatId) form.chat_id = opt.chatId;
+            if (opt.messageId) form.message_id = opt.messageId;
+            if (opt.inlineMessageId) form.inline_message_id = opt.inlineMessageId;
+            if (opt.disableEditMessage) form.disable_edit_message = opt.disableEditMessage;
+            return form;
+        }
+    },
+
+    getGameHighScores: {
+        arguments: ['user_id'],
+        options: function options(form) {
+            let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+            if (opt.chatId) form.chat_id = opt.chatId;
+            if (opt.messageId) form.message_id = opt.messageId;
+            if (opt.inlineMessageId) form.inline_message_id = opt.inlineMessageId;
+            return form;
+        }
+    },
+
+    sendInvoice: {
+        arguments: ['chat_id'],
+        options: function options(form) {
+            let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+            const photo = opt.photo || {};
+            const need = opt.need || {};
+
+            form.title = opt.title;
+            form.description = opt.description;
+            form.payload = opt.payload;
+            form.provider_token = opt.providerToken;
+            form.start_parameter = opt.startParameter;
+            form.currency = opt.currency;
+            form.prices = JSON.stringify(opt.prices);
+
+            if (photo.url) form.photo_url = photo.url;
+            if (Number.isInteger(photo.size)) form.photo_size = photo.size;
+            if (Number.isInteger(photo.width)) form.photo_width = photo.width;
+            if (Number.isInteger(photo.height)) form.photo_height = photo.height;
+
+            if (need.name === true) form.need_name = need.name;
+            if (need.phoneNumber === true) form.need_phone_number = need.phoneNumber;
+            if (need.email === true) form.need_email = need.email;
+            if (need.shippingAddress === true) form.need_shipping_address = need.shippingAddress;
+
+            if (opt.isFlexible === true) form.is_flexible = opt.isFlexible;
+
+            return form;
+        }
+    },
+
+    getStickerSet: {
+        arguments: ['name']
+    },
+
+    uploadStickerFile: function uploadStickerFile(user_id, sticker, opt) {
+        return sendFile.call(this, 'png_sticker', sticker, opt, { user_id: user_id }, 'uploadStickerFile');
+    },
+    createNewStickerSet: function createNewStickerSet(user_id, name, title, sticker, emojis) {
+        let opt = arguments.length > 5 && arguments[5] !== undefined ? arguments[5] : {};
+
+        const form = { user_id: user_id, name: name, title: title, emojis: emojis };
+        if (opt.containsMasks) form.contains_masks = opt.containsMasks;
+        if (opt.maskPosition) form.mask_position = opt.maskPosition;
+        return sendFile.call(this, 'png_sticker', sticker, opt, form, 'createNewStickerSet');
+    },
+
+
+    setChatStickerSet: {
+        arguments: ['chat_id', 'sticker_set_name']
+    },
+
+    deleteChatStickerSet: {
+        arguments: ['chat_id']
+    },
+
+    addStickerToSet: function addStickerToSet(user_id, name, sticker, emojis) {
+        let opt = arguments.length > 4 && arguments[4] !== undefined ? arguments[4] : {};
+
+        const form = { user_id: user_id, name: name, emojis: emojis };
+        if (opt.maskPosition) form.mask_position = opt.maskPosition;
+        return sendFile.call(this, 'png_sticker', sticker, opt, form, 'addStickerToSet');
+    },
+
+
+    setStickerPositionInSet: {
+        arguments: ['sticker', 'position']
+    },
+
+    deleteStickerFromSet: {
+        arguments: ['sticker']
+    },
+
+    getChat: {
+        arguments: ['chat_id']
+    },
+
+    leaveChat: {
+        arguments: ['chat_id']
+    },
+
+    getChatAdministrators: {
+        short: 'getAdmins',
+        arguments: ['chat_id']
+    },
+
+    getChatMember: {
+        short: 'getMember',
+        arguments: ['chat_id', 'user_id']
+    },
+
+    getChatMembersCount: {
+        short: 'countMembers',
+        arguments: ['chat_id']
+    },
+
+    kickChatMember: {
+        short: 'kick',
+        arguments: ['chat_id', 'user_id'],
+        options: function options(form, opt) {
+            if (opt.untilDate) form.until_date = opt.untilDate;
+            return form;
+        }
+    },
+
+    unbanChatMember: {
+        short: 'unban',
+        arguments: ['chat_id', 'user_id']
+    },
+
+    restrictChatMember: {
+        arguments: ['chat_id', 'user_id'],
+        options: function options(form, opt) {
+            if (opt.untilDate) form.until_date = opt.untilDate;
+            if (opt.canSendMessages) form.can_send_messages = opt.canSendMessages;
+            if (opt.canSendMediaMessages) form.can_send_media_messages = opt.canSendMediaMessages;
+            if (opt.canSendOtherMessages) form.can_send_other_messages = opt.canSendOtherMessages;
+            if (opt.canAddWebPagePreviews) form.can_add_web_page_previews = opt.canAddWebPagePreviews;
+            return form;
+        }
+    },
+
+    promoteChatMember: {
+        arguments: ['chat_id', 'user_id'],
+        options: function options(form, opt) {
+            if (opt.canChangeInfo) form.can_change_info = opt.canChangeInfo;
+            if (opt.canPostMessages) form.can_post_messages = opt.canPostMessages;
+            if (opt.canEditMessages) form.can_edit_messages = opt.canEditMessages;
+            if (opt.canDeleteMessages) form.can_delete_messages = opt.canDeleteMessages;
+            if (opt.canInviteUsers) form.can_invite_users = opt.canInviteUsers;
+            if (opt.canRestrictMembers) form.can_restrict_members = opt.canRestrictMembers;
+            if (opt.canPinMessages) form.can_pin_messages = opt.canPinMessages;
+            if (opt.canPromoteMembers) form.can_promote_members = opt.canPromoteMembers;
+            return form;
+        }
+    },
+
+    exportChatInviteLink: {
+        arguments: ['chat_id']
+    },
+
+    setChatPhoto: function setChatPhoto(chat_id, photo, opt) {
+        return sendFile.call(this, 'photo', photo, opt, { chat_id: chat_id }, 'setChatPhoto');
+    },
+
+
+    deleteChatPhoto: {
+        arguments: ['chat_id']
+    },
+
+    setChatTitle: {
+        arguments: ['chat_id', 'title']
+    },
+
+    setChatDescription: {
+        arguments: ['chat_id', 'description']
+    },
+
+    pinChatMessage: {
+        arguments: ['chat_id', 'message_id']
+    },
+
+    unpinChatMessage: {
+        arguments: ['chat_id']
+    },
+
+    answerInlineQuery: {
+        short: 'answerQuery',
+        arguments: function _arguments(answers) {
+            const data = {
+                inline_query_id: answers.id,
+                results: answers.results(),
+                next_offset: answers.nextOffset,
+                is_personal: answers.personal,
+                cache_time: answers.cacheTime
+            };
+
+            if (answers.pmText !== undefined) data.switch_pm_text = answers.pmText;
+            if (answers.pmParameter !== undefined) data.switch_pm_parameter = answers.pmParameter;
+
+            return data;
+        }
+    },
+
+    answerCallbackQuery: {
+        short: 'answerCallback',
+        arguments: ['callback_query_id'],
+        options: function options(form, opt) {
+            if (opt.text) form.text = opt.text;
+            if (opt.url) form.url = opt.url;
+            if (opt.showAlert) form.show_alert = opt.showAlert;
+            if (opt.cacheTime) form.cache_time = opt.cacheTime;
+            return form;
+        }
+    },
+
+    answerShippingQuery: {
+        arguments: ['shipping_query_id', 'ok'],
+        options: function options(form, opt) {
+            if (opt.shippingOptions) form.shipping_options = opt.shippingOptions;
+            if (opt.errorMessage) form.error_message = opt.errorMessage;
+            return form;
+        }
+    },
+
+    answerPreCheckoutQuery: {
+        arguments: ['pre_checkout_query_id', 'ok'],
+        options: function options(form, opt) {
+            if (opt.errorMessage) form.error_message = opt.errorMessage;
+            return form;
+        }
+    },
+
+    deleteMessage: {
+        arguments: ['chat_id', 'message_id']
+    },
+
+    editMessageText: {
+        short: 'editText',
+        arguments: (obj, text) => editObject(obj, { text: text })
+    },
+
+    editMessageCaption: {
+        short: 'editCaption',
+        arguments: (obj, caption) => editObject(obj, { caption: caption })
+    },
+
+    editMessageReplyMarkup: {
+        short: 'editMarkup',
+        arguments: (obj, reply_markup) => editObject(obj, { reply_markup: reply_markup })
+    },
+
+    setWebhook: function setWebhook(url, certificate, allowedUpdates, maxConnections) {
+        const form = { url: url };
+
+        if (Array.isArray(allowedUpdates)) {
+            form.allowed_updates = allowedUpdates;
+        }
+
+        if (Number.isInteger(maxConnections)) {
+            form.max_connections = maxConnections;
+        }
+
+        if (certificate) {
+            form.certificate = {
+                value: fs.readFileSync(certificate),
+                options: {
+                    filename: 'cert.pem'
+                }
+            };
+            return this.request('/setWebhook', null, form);
+        }
+
+        return this.request('/setWebhook', form);
+    },
+
+
+    getWebhookInfo: {},
+
+    deleteWebhook: {}
 
 };
 
 // Functions
 
 function editObject(obj, form) {
-  if (obj.chatId && obj.messageId) {
-    form.chat_id = obj.chatId;
-    form.message_id = obj.messageId;
-  } else if (obj.inlineMsgId) {
-    form.inline_message_id = obj.inlineMsgId;
-  }
-  return form;
+    if (obj.chatId && obj.messageId) {
+        form.chat_id = obj.chatId;
+        form.message_id = obj.messageId;
+    } else if (obj.inlineMsgId) {
+        form.inline_message_id = obj.inlineMsgId;
+    }
+    return form;
 }
 
-function sendFile(type, chat_id, file) {
-  var opt = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : {};
+function sendFile(type, file) {
+    let opt = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
+    let methodForm = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : {};
+    let methodUrl = arguments[4];
 
 
-  var form = this.properties({ chat_id: chat_id }, opt);
-  var defName = 'file.' + DEFAULT_FILE_EXTS[type];
+    const form = this.properties(methodForm, opt);
+    const defaultName = `file.${DEFAULT_FILE_EXTENSIONS[type]}`;
 
-  var url = 'send' + type.charAt(0).toUpperCase() + type.slice(1);
+    const url = methodUrl ? methodUrl : 'send' + type.charAt(0).toUpperCase() + type.slice(1);
 
-  // Send bot action event
-  this.event(url, [].slice.call(arguments).splice(0, 1));
+    // Send bot action event
+    this.event(url, [].slice.call(arguments).splice(0, 1));
 
-  // Set file caption
-  if (opt.caption) form.caption = opt.caption;
+    // Set file caption
+    if (opt.caption) form.caption = opt.caption;
 
-  if (file instanceof stream.Stream) {
-    // File stream object
-    if (!opt.fileName) opt.fileName = nurl.parse(path.basename(file.path)).pathname;
-    form[type] = {
-      value: file,
-      options: { filename: opt.fileName }
-    };
-  } else if (Buffer.isBuffer(file)) {
-    // File buffer
-    if (!opt.fileName) opt.fileName = defName;
-    form[type] = {
-      value: file,
-      options: { filename: opt.fileName }
-    };
-  } else if (reURL.test(file)) {
-    // File url
-    if (!opt.fileName) opt.fileName = path.basename(nurl.parse(file).pathname) || defName;
-    form[type] = {
-      value: request.get(file),
-      options: { filename: opt.fileName }
-    };
-  } else if (fs.existsSync(file)) {
-    // File location
-    if (!opt.fileName) opt.fileName = path.basename(file);
-    form[type] = {
-      value: fs.createReadStream(file),
-      options: { filename: opt.fileName }
-    };
-  } else {
-    // File as 'file_id'
-    form[type] = file;
-  }
+    if (file instanceof stream.Stream) {
+        // File stream object
+        if (!opt.fileName) {
+            opt.fileName = nurl.parse(path.basename(file.path)).pathname;
+        }
+        form[type] = {
+            value: file,
+            options: { filename: opt.fileName }
+        };
+    } else if (Buffer.isBuffer(file)) {
+        // File buffer
+        if (!opt.fileName) opt.fileName = defaultName;
+        form[type] = {
+            value: file,
+            options: { filename: opt.fileName }
+        };
+    } else if (REGEXP_URL.test(file)) {
+        // File url
+        if (!opt.fileName) {
+            opt.fileName = path.basename(nurl.parse(file).pathname) || defaultName;
+        }
+        if (opt.serverDownload === true) {
+            // Download by our server
+            form[type] = {
+                value: request.get(file),
+                options: { filename: opt.fileName }
+            };
+        } else {
+            // Download by Telegram server
+            form[type] = file;
+        }
+    } else if (fs.existsSync(file)) {
+        // File location
+        if (!opt.fileName) opt.fileName = path.basename(file);
+        form[type] = {
+            value: fs.createReadStream(file),
+            options: { filename: opt.fileName }
+        };
+    } else {
+        // File as 'file_id'
+        form[type] = file;
+    }
 
-  return this.request('/' + url, null, form);
+    return this.request(`/${url}`, null, form).then(response => response.result);
 }
 
 /* Answer List */
 
-var AnswerList = function () {
-  function AnswerList(id) {
-    var opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+class AnswerList {
 
-    _classCallCheck(this, AnswerList);
+    constructor(id) {
+        let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
 
-    this.id = id;
-    this.cacheTime = Number(opt.cacheTime) || 300;
-    this.nextOffset = opt.nextOffset === undefined ? null : opt.nextOffset;
-    this.personal = opt.personal === undefined ? false : opt.personal;
-    this.list = [];
-  }
-
-  _createClass(AnswerList, [{
-    key: 'add',
-    value: function add(type) {
-      var set = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
-      set.type = type;
-      this.list.push(set);
-      return set;
+        this.id = id;
+        this.cacheTime = Number(opt.cacheTime) || 300;
+        this.nextOffset = opt.nextOffset === undefined ? null : opt.nextOffset;
+        this.personal = opt.personal === undefined ? false : opt.personal;
+        this.pmText = opt.pmText;
+        this.pmParameter = opt.pmParameter;
+        this.list = [];
     }
-  }, {
-    key: 'results',
-    value: function results() {
-      return JSON.stringify(this.list);
-    }
-  }]);
 
-  return AnswerList;
-}();
+    add(type) {
+        let set = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+
+        set.type = type;
+        this.list.push(set);
+        return set;
+    }
+
+    results() {
+        return JSON.stringify(this.list);
+    }
+
+}
 
 // Add answer methods
-
-
 {
-  for (var prop in ANSWER_METHODS) {
-    AnswerList.prototype[prop] = function (name) {
-      return function (set) {
-        return this.add(name, set);
-      };
-    }(ANSWER_METHODS[prop]);
-  }
+    for (let prop in ANSWER_METHODS) {
+        AnswerList.prototype[prop] = (name => {
+            return function (set) {
+                return this.add(name, set);
+            };
+        })(ANSWER_METHODS[prop]);
+    }
 }
 
 // Export methods
