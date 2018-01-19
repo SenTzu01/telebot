@@ -1,5 +1,3 @@
-'use strict';
-
 /*
     Short replays for lazy people :)
 */
@@ -16,9 +14,7 @@ const SHORTCUTS = {
     game: 'sendGame',
     action: 'sendChatAction',
     location: 'sendLocation',
-    place: function place(position, title, address) {
-        let props = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : {};
-
+    place(position, title, address, props = {}) {
         const msg = this.data.message;
         return this.bot.sendVenue(this.userId, position, title, address, this.propertyProcessor(msg, props));
     }
@@ -34,7 +30,7 @@ module.exports = {
         replyMode: false
     },
 
-    plugin: function plugin(bot, pluginConfig) {
+    plugin(bot, pluginConfig) {
 
         const methodName = pluginConfig.methodName || 'reply';
         const isPrivate = pluginConfig.privateMode === true;
@@ -57,22 +53,22 @@ module.exports = {
             for (let name in SHORTCUTS) {
                 const fn = SHORTCUTS[name];
                 if (typeof fn === 'string') {
-                    replyMethods[name] = function (data) {
-                        let props = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
+                    replyMethods[name] = (data, props = {}) => {
                         return bot[fn](userId, data, propertyProcessor(msg, props));
                     };
                 } else {
-                    replyMethods[name] = fn.bind({ bot: bot, data: data, userId: userId, propertyProcessor: propertyProcessor });
+                    replyMethods[name] = fn.bind({bot, data, userId, propertyProcessor});
                 }
             }
 
             return replyMethods;
         }
 
-        bot.mod('message', data => {
+        bot.mod('message', (data) => {
             data.message[methodName] = replyObject(data);
             return data;
         });
+
     }
+
 };

@@ -1,700 +1,548 @@
 'use strict';
 
-var _typeof = typeof Symbol === "function" && typeof Symbol.iterator === "symbol" ? function (obj) { return typeof obj; } : function (obj) { return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj; };
+const request = require('request');
+const webhook = require('./webhook.js');
+const standardUpdates = require('./updates.js');
+const standardMethods = require('./methods.js');
 
-var _createClass = function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ("value" in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; }();
+const BUILDIN_PLUGINS_FOLDER = '../plugins/';
+const BUILDIN_PLUGINS = ['regExpMessage', 'shortReply'];
 
-function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError("Cannot call a class as a function"); } }
+const USER_PLUGIN_FOLDER = '../plugins/';
 
-var _request = require('request'),
-    webhook = require('./webhook.js'),
-    standardUpdates = require('./updates.js'),
-    standardMethods = require('./methods.js');
+class TeleBot {
 
-/* Telegram Bot */
+    constructor(cfg) {
 
-var TeleBot = function () {
-  function TeleBot(cfg) {
-    var _this = this;
+        if (typeof cfg !== 'object') cfg = { token: cfg };
 
-    _classCallCheck(this, TeleBot);
+        if (!cfg.token || cfg.token.split(':').length !== 2) {
+            throw Error('[bot.error] invalid bot token');
+        }
 
-    if ((typeof cfg === 'undefined' ? 'undefined' : _typeof(cfg)) != 'object') cfg = { token: cfg };
+        this.cfg = cfg;
+        this.token = cfg.token;
+        this.id = this.token.split(':')[0];
+        this.api = `https://api.telegram.org/bot${this.token}`;
+        this.fileLink = `https://api.telegram.org/file/bot${this.token}/`;
 
-    if (!cfg.token || cfg.token.split(':').length != 2) {
-      throw Error('[bot.error] invalid bot token');
+        this.pluginConfig = cfg.pluginConfig || {};
+
+        this.usePlugins = Array.isArray(cfg.usePlugins) ? cfg.usePlugins : [];
+        this.pluginFolder = cfg.pluginFolder || USER_PLUGIN_FOLDER;
+
+        this.buildInPlugins = cfg.buildInPlugins !== undefined ? cfg.buildInPlugins || [] : BUILDIN_PLUGINS;
+        this.buildInPluginsFolder = cfg.buildInPluginsFolder || BUILDIN_PLUGINS_FOLDER;
+        
+        const poll = cfg.polling || {};
+
+        this.proxy = poll.proxy;
+        this.limit = poll.limit > 0 && poll.limit <= 100 ? poll.limit : 100;
+        this.interval = poll.interval >= 0 ? poll.interval : 300;
+        this.timeout = poll.timeout >= 0 ? poll.timeout : 0;
+        this.retryTimeout = poll.retryTimeout >= 0 ? poll.retryTimeout : 5000;
+
+        this.webhook = cfg.webhook;
+
+        this.allowedUpdates = typeof cfg.allowedUpdates === 'string' || Array.isArray(cfg.allowedUpdates) ? cfg.allowedUpdates : [];
+        this.maxConnections = this.webhook && Number.isInteger(this.webhook.maxConnections) ? this.webhook.maxConnections : 40;
+
+        this.updateId = 0;
+        this.loopFn = null;
+
+        this.flags = {
+            poll: false,
+            retry: false,
+            looping: false
+        };
+
+        this.modList = {};
+        this.eventList = new Map();
+
+        this.updateTypes = standardUpdates;
+
+        this.processUpdate = (update, props) => {
+            if (update) {
+                for (let name in this.updateTypes) {
+                    if (name in update) {
+                        update = update[name];
+                        return this.updateTypes[name].call(this, update, props);
+                    }
+                }
+            }
+        };
+
+        // Load build-in plugins
+        this.buildInPlugins.map(buildInPluginName => this.plug(require(this.buildInPluginsFolder + buildInPluginName)));
+
+        // Load user plugins
+        this.usePlugins.map(userPluginName => this.plug(require(this.pluginFolder + userPluginName)));
     }
 
-    this.cfg = cfg;
-    this.token = cfg.token;
-    this.id = this.token.split(':')[0];
-    this.api = 'https://api.telegram.org/bot' + this.token;
-    this.fileLink = 'https://api.telegram.org/file/bot' + this.token + '/';
+    /* Plugins */
 
-    var poll = cfg.polling;
+    plug(module) {
+        const id = module.id,
+              defaultConfig = module.defaultConfig,
+              plugin = module.plugin;
 
-    // Migration
-    if (!poll) {
-      if (cfg.pooling) {
-        poll = cfg.pooling;
-        console.warn('[bot.warning] use "polling" option instead of "pooling"!');
-      } else {
-        poll = {};
-        // Set cfg.polling
-        var _arr = ['limit', 'timeout', 'retryTimeout'];
-        for (var _i = 0; _i < _arr.length; _i++) {
-          var name = _arr[_i];
-          poll[name] = cfg[name];
+
+        if (id) {
+
+            const userConfig = this.pluginConfig[id];
+            const isConfigObject = Object.prototype.toString.call(defaultConfig) === '[object Object]';
+
+            let config;
+            if (isConfigObject) {
+                config = Object.assign(defaultConfig, userConfig);
+            } else {
+                config = userConfig || defaultConfig;
+            }
+
+            plugin.call(this, this, config || {});
+
+            console.log(`[bot.plugin] loaded '${id}' plugin`);
+        } else {
+            console.log('[bot.plugin] skip plugin without id');
         }
-        // cfg.sleep renamed to cfg.polling.interval
-        poll.interval = cfg.sleep;
-      }
-    }
-
-    this.limit = poll.limit > 0 && poll.limit <= 100 ? poll.limit : 100;
-    this.interval = poll.interval >= 0 ? poll.interval : 1000;
-    this.timeout = poll.timeout >= 0 ? poll.timeout : 0;
-    this.retryTimeout = poll.retryTimeout >= 0 ? poll.retryTimeout : 5000;
-
-    this.webhook = cfg.webhook;
-
-    this.updateId = 0;
-    this.loopFn = null;
-
-    this.flags = {
-      poll: false,
-      retry: false,
-      looping: false
-    };
-
-    this.modList = {};
-    this.eventList = {};
-
-    this.updateTypes = standardUpdates;
-
-    this.processUpdate = function (update, props) {
-      for (var _name in _this.updateTypes) {
-        if (_name in update) {
-          update = update[_name];
-          return _this.updateTypes[_name].call(_this, update, props);
-        }
-      }
-    };
-  }
-
-  /* Modules */
-
-  _createClass(TeleBot, [{
-    key: 'use',
-    value: function use(fn) {
-      return fn.call(this, this, this.cfg.modules);
     }
 
     /* Connection */
 
-  }, {
-    key: 'connect',
-    value: function connect() {
-      var _this2 = this;
+    start() {
 
-      var f = this.flags;
+        const f = this.flags;
 
-      // Set webhook
-      if (this.webhook) {
-        var _ret = function () {
-          var _webhook = _this2.webhook,
-              url = _webhook.url,
-              cert = _webhook.cert;
+        // Set webhook
+        if (this.webhook) {
+            var _webhook = this.webhook;
+            let url = _webhook.url,
+                cert = _webhook.cert;
 
-          if (url) url = url + '/' + _this2.token;
-          return {
-            v: _this2.setWebhook(url, cert).then(function (x) {
-              console.log('[bot.webhook] set to "' + url + '"');
-              return webhook.call(_this2, _this2, _this2.webhook);
-            }).catch(function (error) {
-              console.error('[bot.error.webhook]', error);
-              _this2.event('error', { error: error });
-              return;
-            })
-          };
-        }();
+            if (url) url = `${url}/${this.token}`;
 
-        if ((typeof _ret === 'undefined' ? 'undefined' : _typeof(_ret)) === "object") return _ret.v;
-      }
+            return this.setWebhook(url, cert, this.allowedUpdates, this.maxConnections).then(() => {
 
-      // Delete webhook
-      this.setWebhook().then(function (data) {
-        f.poll = true;
-        if (data.description == 'Webhook was deleted') console.log('[bot.webhook] webhook was deleted');
-        console.log('[bot.info] bot started');
-      }).catch(function (error) {
-        console.error('[bot.error.webhook]', error);
-        _this2.event('error', { error: error });
-        return;
-      });
+                console.log(`[bot.webhook] set to "${url}"`);
+                return webhook.call(this, this, this.webhook);
+            }).catch(error => {
 
-      f.looping = true;
-
-      this.event('connect');
-
-      // Global loop function
-      this.loopFn = setInterval(function (x) {
-
-        // Stop on false looping flag
-        if (!f.looping) clearInterval(_this2.loopFn);
-
-        // Skip processing on false poll flag
-        if (!f.poll) return;
-
-        f.poll = false;
-
-        // Get updates
-        _this2.getUpdates().then(function (x) {
-
-          // Retry connecting
-          if (f.retry) {
-
-            var now = Date.now();
-            var diff = (now - f.retry) / 1000;
-
-            console.log('[bot.info.update] reconnected after ' + diff + ' seconds');
-            _this2.event('reconnected', {
-              startTime: f.retry, endTime: now, diffTime: diff
+                console.error('[bot.error.webhook]', error);
+                this.event('error', { error: error });
             });
+        }
 
-            f.retry = false;
-          }
+        // Delete webhook
+        this.setWebhook().then(response => {
+            f.poll = true;
 
-          // Tick
-          return _this2.event('tick');
-        }).then(function (x) {
+            if (response.description === 'Webhook was deleted') {
+                console.log('[bot.webhook] webhook was deleted');
+            }
 
-          // Seems okay for the next poll
-          f.poll = true;
-        }).catch(function (error) {
+            console.log('[bot.info] bot started');
+        }).catch(error => {
 
-          // Set retry flag as current date (for timeout calculations)
-          if (f.retry === false) f.retry = Date.now();
-
-          console.error('[bot.error.update]', error.stack || error);
-          _this2.event(['error', 'error.update'], { error: error });
-
-          return Promise.reject();
-        }).catch(function (x) {
-
-          var seconds = _this2.retryTimeout / 1000;
-          console.log('[bot.info.update] reconnecting in ' + seconds + ' seconds...');
-          _this2.event('reconnecting');
-
-          // Set reconnecting timeout
-          setTimeout(function (x) {
-            return f.poll = true;
-          }, _this2.retryTimeout);
+            console.error('[bot.error.webhook]', error);
+            this.event('error', { error: error });
         });
-      }, this.interval);
+
+        f.looping = true;
+
+        this.event('start');
+
+        // Global loop function
+        this.loopFn = setInterval(() => {
+
+            // Stop on false looping flag
+            if (!f.looping) clearInterval(this.loopFn);
+
+            // Skip processing on false poll flag
+            if (!f.poll) return;
+
+            f.poll = false;
+
+            // Get updates
+            this.getUpdates().then(() => {
+
+                // Retry connecting
+                if (f.retry) {
+
+                    const now = Date.now();
+                    const diff = (now - f.retry) / 1000;
+
+                    console.log(`[bot.info.update] reconnected after ${diff} seconds`);
+                    this.event('reconnected', {
+                        startTime: f.retry, endTime: now, diffTime: diff
+                    });
+
+                    f.retry = false;
+                }
+
+                // Tick
+                return this.event('tick');
+            }).then(() => {
+
+                // Seems okay for the next poll
+                f.poll = true;
+            }).catch(error => {
+
+                // Set retry flag as current date (for timeout calculations)
+                if (f.retry === false) f.retry = Date.now();
+
+                console.error(`[bot.error.update]`, error.stack || error);
+                this.event(['error', 'error.update'], { error: error });
+
+                return Promise.reject();
+            }).catch(() => {
+
+                const seconds = this.retryTimeout / 1000;
+                console.log(`[bot.info.update] reconnecting in ${seconds} seconds...`);
+                this.event('reconnecting');
+
+                // Set reconnecting timeout
+                setTimeout(() => f.poll = true, this.retryTimeout);
+            });
+        }, this.interval);
+    }
+
+    connect() {
+        return this.start.apply(this, arguments);
     }
 
     /* Stop looping */
 
-  }, {
-    key: 'disconnect',
-    value: function disconnect(message) {
-      this.flags.looping = false;
-      console.log('[bot.info] bot disconnected ' + (message ? ': ' + message : ''));
-      this.event('disconnect', message);
+    stop(message) {
+        this.flags.looping = false;
+        console.log(`[bot.info] bot stopped ${message ? ': ' + message : ''}`);
+        this.event('stop', message);
     }
 
     /* Fetch updates */
 
-  }, {
-    key: 'getUpdates',
-    value: function getUpdates() {
-      var offset = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : this.updateId;
-
-      var _this3 = this;
-
-      var limit = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : this.limit;
-      var timeout = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : this.timeout;
+    getUpdates() {
+        let offset = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : this.updateId;
+        let limit = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : this.limit;
+        let timeout = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : this.timeout;
+        let allowed_updates = arguments.length > 3 && arguments[3] !== undefined ? arguments[3] : this.allowedUpdates;
 
 
-      // Request updates from Telegram server
-      return this.request('/getUpdates', {
-        offset: offset, limit: limit, timeout: timeout
-      }).then(function (body) {
-        return _this3.receiveUpdates(body.result);
-      });
+        // Request updates from Telegram server
+        return this.request('/getUpdates', {
+            offset: offset, limit: limit, timeout: timeout, allowed_updates: allowed_updates
+        }).then(body => this.receiveUpdates(body.result));
     }
 
     /* Recive updates */
 
-  }, {
-    key: 'receiveUpdates',
-    value: function receiveUpdates(updateList) {
-      var _this4 = this;
+    receiveUpdates(updateList) {
 
-      // Globals
-      var mod,
-          props = {},
-          promise = Promise.resolve();
+        // Globals
+        var mod,
+            props = {};
+        var promise = Promise.resolve();
 
-      // No updates
-      if (!updateList.length) return promise;
+        // No updates
+        if (!updateList.length) return promise;
 
-      // We have updates
-      return this.event('update', updateList).then(function (eventProps) {
+        // We have updates
+        return this.event('update', updateList).then(eventProps => {
 
-        // Run update list modifiers
-        mod = _this4.modRun('updateList', {
-          list: updateList,
-          props: extendProps(props, eventProps)
-        });
+            // Run update list modifiers
+            mod = this.modRun('updateList', {
+                updateList: updateList, props: extendProps(props, eventProps)
+            });
 
-        updateList = mod.list;
-        props = mod.props;
-
-        // Every Telegram update
-        var _iteratorNormalCompletion = true;
-        var _didIteratorError = false;
-        var _iteratorError = undefined;
-
-        try {
-          var _loop = function _loop() {
-            var update = _step.value;
-
-
-            // Update ID
-            var nextId = ++update.update_id;
-            if (_this4.updateId < nextId) _this4.updateId = nextId;
-
-            // Run update modifiers
-            mod = _this4.modRun('update', { update: update, props: props });
-
-            update = mod.update;
+            updateList = mod.updateList;
             props = mod.props;
 
-            // Process update
-            promise = promise.then(function (x) {
-              return _this4.processUpdate(update, props);
-            });
-          };
+            // Every Telegram update
+            for (let update of updateList) {
 
-          for (var _iterator = updateList[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
-            _loop();
-          }
-        } catch (err) {
-          _didIteratorError = true;
-          _iteratorError = err;
-        } finally {
-          try {
-            if (!_iteratorNormalCompletion && _iterator.return) {
-              _iterator.return();
+                // Update ID
+                const nextId = ++update.update_id;
+                if (this.updateId < nextId) this.updateId = nextId;
+
+                // Run update modifiers
+                mod = this.modRun('update', { update: update, props: props });
+
+                update = mod.update;
+                props = mod.props;
+
+                // Process update
+                promise = promise.then(() => this.processUpdate(update, props));
             }
-          } finally {
-            if (_didIteratorError) {
-              throw _iteratorError;
-            }
-          }
-        }
 
-        return promise;
-      }).catch(function (error) {
+            return promise;
+        }).catch(error => {
 
-        console.log('[bot.error]', error.stack || error);
-        _this4.event('error', { error: error });
+            console.log('[bot.error]', error.stack || error);
+            this.event('error', { error: error });
 
-        // Don't trigger server reconnect
-        return Promise.resolve();
-      });
+            // Don't trigger server reconnect
+            return Promise.resolve();
+        });
     }
 
     /* Send request to server */
 
-  }, {
-    key: 'request',
-    value: function request(url, form, data) {
-      var options = { url: this.api + url, json: true };
-      if (form) {
-        options.form = form;
-      } else {
-        for (var item in data) {
-          var type = _typeof(data[item]);
-          if (type == 'string' || type == 'object') continue;
-          data[item] = JSON.stringify(data[item]);
+    request(url, form, data) {
+
+        const options = {
+            url: this.api + url,
+            json: true
+        };
+
+        if (this.proxy) options.proxy = this.proxy;
+
+        if (form) {
+            options.form = form;
+        } else {
+            for (let item in data) {
+                const type = typeof data[item];
+                if (type === 'string' || type === 'object') continue;
+                data[item] = JSON.stringify(data[item]);
+            }
+            options.formData = data;
         }
-        options.formData = data;
-      };
-      return new Promise(function (resolve, reject) {
-        _request.post(options, function (error, response, body) {
-          if (error || !body.ok || response.statusCode == 404) {
-            return reject(error || body || 404);
-          }
-          return resolve(body);
+
+        return new Promise((resolve, reject) => {
+            request.post(options, (error, response, body) => {
+                if (error || !body || !body.ok || response.statusCode === 404) {
+                    return reject(error || body || 404);
+                }
+                return resolve(body);
+            });
         });
-      });
     }
 
     /* Modifications */
 
-  }, {
-    key: 'mod',
-    value: function mod(names, fn) {
-      if (typeof names == 'string') names = [names];
-      var mods = this.modList;
-      var _iteratorNormalCompletion2 = true;
-      var _didIteratorError2 = false;
-      var _iteratorError2 = undefined;
-
-      try {
-        for (var _iterator2 = names[Symbol.iterator](), _step2; !(_iteratorNormalCompletion2 = (_step2 = _iterator2.next()).done); _iteratorNormalCompletion2 = true) {
-          var name = _step2.value;
-
-          if (!mods[name]) mods[name] = [];
-          if (mods[name].includes(fn)) return;
-          mods[name].push(fn);
+    mod(names, fn) {
+        if (typeof names === 'string') names = [names];
+        const mods = this.modList;
+        for (let name of names) {
+            if (!mods[name]) mods[name] = [];
+            if (mods[name].includes(fn)) return;
+            mods[name].push(fn);
         }
-      } catch (err) {
-        _didIteratorError2 = true;
-        _iteratorError2 = err;
-      } finally {
-        try {
-          if (!_iteratorNormalCompletion2 && _iterator2.return) {
-            _iterator2.return();
-          }
-        } finally {
-          if (_didIteratorError2) {
-            throw _iteratorError2;
-          }
-        }
-      }
-
-      return fn;
+        return fn;
     }
-  }, {
-    key: 'modRun',
-    value: function modRun(name, data) {
-      var list = this.modList[name];
-      if (!list || !list.length) return data;
-      var _iteratorNormalCompletion3 = true;
-      var _didIteratorError3 = false;
-      var _iteratorError3 = undefined;
 
-      try {
-        for (var _iterator3 = list[Symbol.iterator](), _step3; !(_iteratorNormalCompletion3 = (_step3 = _iterator3.next()).done); _iteratorNormalCompletion3 = true) {
-          var fn = _step3.value;
-          data = fn.call(this, data);
-        }
-      } catch (err) {
-        _didIteratorError3 = true;
-        _iteratorError3 = err;
-      } finally {
-        try {
-          if (!_iteratorNormalCompletion3 && _iterator3.return) {
-            _iterator3.return();
-          }
-        } finally {
-          if (_didIteratorError3) {
-            throw _iteratorError3;
-          }
-        }
-      }
-
-      return data;
+    modRun(name, data) {
+        const list = this.modList[name];
+        if (!list || !list.length) return data;
+        for (let fn of list) data = fn.call(this, data);
+        return data;
     }
-  }, {
-    key: 'removeMod',
-    value: function removeMod(name, fn) {
-      var list = this.modList[name];
-      if (!list) return false;
-      var index = list.indexOf(fn);
-      if (index == -1) return false;
-      list.splice(index, 1);
-      return true;
+
+    removeMod(name, fn) {
+        let list = this.modList[name];
+        if (!list) return false;
+        let index = list.indexOf(fn);
+        if (index === -1) return false;
+        list.splice(index, 1);
+        return true;
     }
 
     /* Events */
 
-  }, {
-    key: 'on',
-    value: function on(types, fn, opt) {
-      var _this5 = this;
+    on(types, fn, opt) {
 
-      if (!opt) opt = {};
-      if (typeof types == 'string') types = [types];
-      var _iteratorNormalCompletion4 = true;
-      var _didIteratorError4 = false;
-      var _iteratorError4 = undefined;
+        if (!opt) opt = {};
+        if (!Array.isArray(types)) types = [types];
 
-      try {
-        var _loop2 = function _loop2() {
-          var type = _step4.value;
+        const eventList = this.eventList;
 
-          var event = _this5.eventList[type];
-          if (!event) {
-            _this5.eventList[type] = { fired: null, list: [fn] };
-          } else {
-            if (event.list.includes(fn)) return 'continue';
-            event.list.push(fn);
-            if (opt.fired && event.fired) {
-              (function () {
-                var fired = event.fired;
-                new Promise(function (resolve, reject) {
-                  var output = fn.call(fired.self, fired.data, fired.self, fired.details);
-                  if (output instanceof Promise) output.then(resolve).catch(reject);else resolve(output);
-                }).catch(function (error) {
-                  eventPromiseError.call(_this5, type, fired, error);
-                });
-                if (opt.cleanFired) _this5.eventList[type].fired = null;
-              })();
-            }
-          }
-        };
+        for (let type of types) {
 
-        for (var _iterator4 = types[Symbol.iterator](), _step4; !(_iteratorNormalCompletion4 = (_step4 = _iterator4.next()).done); _iteratorNormalCompletion4 = true) {
-          var _ret3 = _loop2();
+            if (!eventList.has(type)) {
 
-          if (_ret3 === 'continue') continue;
-        }
-      } catch (err) {
-        _didIteratorError4 = true;
-        _iteratorError4 = err;
-      } finally {
-        try {
-          if (!_iteratorNormalCompletion4 && _iterator4.return) {
-            _iterator4.return();
-          }
-        } finally {
-          if (_didIteratorError4) {
-            throw _iteratorError4;
-          }
-        }
-      }
-    }
-  }, {
-    key: 'event',
-    value: function event(types, data, self) {
-      var _this6 = this;
+                eventList.set(type, { fired: null, list: [fn] });
+            } else {
 
-      var promises = [];
-      if (typeof types == 'string') types = [types];
-      var _iteratorNormalCompletion5 = true;
-      var _didIteratorError5 = false;
-      var _iteratorError5 = undefined;
+                const event = eventList.get(type);
 
-      try {
-        var _loop3 = function _loop3() {
-          var type = _step5.value;
+                if (event.list.includes(fn)) continue;
+                event.list.push(fn);
 
-          var event = _this6.eventList[type];
-          var details = { type: type, time: Date.now() };
-          var fired = { self: self, data: data, details: details };
-          if (!event) {
-            _this6.eventList[type] = { fired: fired, list: [] };
-            return 'continue';
-          }
-          event.fired = fired;
-          event = event.list;
-          var _iteratorNormalCompletion6 = true;
-          var _didIteratorError6 = false;
-          var _iteratorError6 = undefined;
+                if (opt.fired && event.fired) {
 
-          try {
-            var _loop4 = function _loop4() {
-              var fn = _step6.value;
+                    let fired = event.fired;
 
-              promises.push(new Promise(function (resolve, reject) {
-                var that = _this6;
-                details.remove = function (fn) {
-                  return function (x) {
-                    return that.removeEvent(type, fn);
-                  };
-                }(fn);
-                fn = fn.call(self, data, self, details);
-                if (fn instanceof Promise) {
-                  fn.then(resolve).catch(reject);
-                } else {
-                  resolve(fn);
+                    new Promise((resolve, reject) => {
+
+                        let output = fn.call(fired.self, fired.data, fired.self, fired.details);
+
+                        if (output instanceof Promise) {
+                            output.then(resolve).catch(reject);
+                        } else {
+                            resolve(output);
+                        }
+                    }).catch(error => {
+                        eventPromiseError.call(this, type, fired, error);
+                    });
+
+                    if (opt.cleanFired) {
+                        eventList.set(type, event.fired = null);
+                    }
                 }
-              }).catch(function (error) {
-                eventPromiseError.call(_this6, type, fired, error);
-              }));
-            };
-
-            for (var _iterator6 = event[Symbol.iterator](), _step6; !(_iteratorNormalCompletion6 = (_step6 = _iterator6.next()).done); _iteratorNormalCompletion6 = true) {
-              _loop4();
             }
-          } catch (err) {
-            _didIteratorError6 = true;
-            _iteratorError6 = err;
-          } finally {
-            try {
-              if (!_iteratorNormalCompletion6 && _iterator6.return) {
-                _iterator6.return();
-              }
-            } finally {
-              if (_didIteratorError6) {
-                throw _iteratorError6;
-              }
+        }
+    }
+
+    event(types, data, self) {
+
+        let promises = [];
+
+        if (!Array.isArray(types)) types = [types];
+
+        for (let type of types) {
+
+            let event = this.eventList.get(type);
+            let details = { type: type, time: Date.now() };
+            let fired = { self: self, data: data, details: details };
+
+            if (!event) {
+                this.eventList.set(type, { fired: fired, list: [] });
+                continue;
             }
-          }
-        };
 
-        for (var _iterator5 = types[Symbol.iterator](), _step5; !(_iteratorNormalCompletion5 = (_step5 = _iterator5.next()).done); _iteratorNormalCompletion5 = true) {
-          var _ret5 = _loop3();
+            event.fired = fired;
+            event = event.list;
 
-          if (_ret5 === 'continue') continue;
+            for (let fn of event) {
+
+                promises.push(new Promise((resolve, reject) => {
+                    let that = this;
+
+                    details.remove = function (fn) {
+                        return () => that.removeEvent(type, fn);
+                    }(fn);
+
+                    fn = fn.call(self, data, self, details);
+
+                    if (fn instanceof Promise) {
+                        fn.then(resolve).catch(reject);
+                    } else {
+                        resolve(fn);
+                    }
+                }).catch(error => {
+                    eventPromiseError.call(this, type, fired, error);
+                }));
+            }
         }
-      } catch (err) {
-        _didIteratorError5 = true;
-        _iteratorError5 = err;
-      } finally {
-        try {
-          if (!_iteratorNormalCompletion5 && _iterator5.return) {
-            _iterator5.return();
-          }
-        } finally {
-          if (_didIteratorError5) {
-            throw _iteratorError5;
-          }
-        }
-      }
 
-      return Promise.all(promises);
+        return Promise.all(promises);
     }
-  }, {
-    key: 'cleanEvent',
-    value: function cleanEvent(type) {
-      var events = this.eventList;
-      if (!events.hasOwnProperty(type)) return false;
-      events[type].fired = null;
-      return true;
+
+    cleanEvent(type) {
+        const eventList = this.eventList;
+        if (!eventList.has(type)) return false;
+        eventList.set(type, eventList.get(type).fired = null);
+        return true;
     }
-  }, {
-    key: 'removeEvent',
-    value: function removeEvent(type, fn) {
-      var events = this.eventList;
-      if (!events.hasOwnProperty(type)) return false;
-      var event = events[type].list;
-      var index = event.indexOf(fn);
-      if (index == -1) return false;
-      event.splice(index, 1);
-      return true;
+
+    removeEvent(type, fn) {
+        const eventList = this.eventList;
+        if (!eventList.has(type)) return false;
+        let event = eventList.get(type).list;
+        let index = event.indexOf(fn);
+        if (index === -1) return false;
+        event.splice(index, 1);
+        return true;
     }
-  }, {
-    key: 'destroyEvent',
-    value: function destroyEvent(type) {
-      var events = this.eventList;
-      if (!events.hasOwnProperty(type)) return false;
-      delete events[type];
-      return true;
+
+    destroyEvent(type) {
+        let eventList = this.eventList;
+        if (!eventList.has(type)) return false;
+        eventList.delete(type);
+        return true;
     }
 
     /* Process global properties */
 
-  }, {
-    key: 'properties',
-    value: function properties() {
-      var form = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-      var opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+    properties() {
+        let form = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+        let opt = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
 
 
-      // Reply to message
-      if (opt.reply) form.reply_to_message_id = opt.reply;
+        const parseMode = opt.parseMode || opt.parse;
+        const replyToMessage = opt.replyToMessage || opt.reply;
+        const replyMarkup = opt.replyMarkup || opt.markup;
+        const notification = opt.notification === false || opt.notify === false;
+        const webPreview = opt.webPreview === false || opt.preview === false;
 
-      // Markdown/HTML support for message
-      if (opt.parse) form.parse_mode = opt.parse;
+        if (replyToMessage) form.reply_to_message_id = replyToMessage;
+        if (parseMode) form.parse_mode = parseMode;
+        if (notification) form.disable_notification = true;
+        if (webPreview) form.disable_web_page_preview = true;
 
-      // User notification
-      if (opt.notify === false) form.disable_notification = true;
-
-      // Web preview
-      if (opt.preview === false) form.disable_web_page_preview = true;
-
-      // Markup object
-      if (opt.markup !== undefined) {
-        if (opt.markup == 'hide' || opt.markup === false) {
-          // Hide keyboard
-          form.reply_markup = JSON.stringify({ hide_keyboard: true });
-        } else if (opt.markup == 'reply') {
-          // Fore reply
-          form.reply_markup = JSON.stringify({ force_reply: true });
-        } else {
-          // JSON keyboard
-          form.reply_markup = opt.markup;
+        // Markup object
+        if (replyMarkup !== undefined) {
+            if (replyMarkup === 'hide' || replyMarkup === false) {
+                // Hide keyboard
+                form.reply_markup = JSON.stringify({ hide_keyboard: true });
+            } else if (replyMarkup === 'reply') {
+                // Fore reply
+                form.reply_markup = JSON.stringify({ force_reply: true });
+            } else {
+                // JSON keyboard
+                form.reply_markup = JSON.stringify(replyMarkup);
+            }
         }
-      }
 
-      return this.modRun('property', { form: form, options: opt }).form;
+        return this.modRun('property', { form: form, options: opt }).form;
     }
 
     /* Method adder */
 
-  }], [{
-    key: 'addMethods',
-    value: function addMethods(methods) {
-      var _this7 = this;
+    static addMethods(methods) {
 
-      var _loop5 = function _loop5(id) {
+        for (let id in methods) {
 
-        var method = methods[id];
+            const method = methods[id];
 
-        // If method is a function
-        if (typeof method == 'function') {
-          _this7.prototype[id] = method;
-          return 'continue';
-        }
+            // If method is a function
+            if (typeof method === 'function') {
+                this.prototype[id] = method;
+                continue;
+            }
 
-        // Set method name
-        var name = method.short || id;
+            // Set method name
+            const name = method.short || id;
 
-        // Argument function
-        var argFn = method.arguments;
-        if (argFn && typeof argFn != 'function') {
-          (function () {
-            if (typeof argFn == 'string') argFn = [argFn];
-            var args = argFn;
-            argFn = function argFn() {
-              var _arguments = arguments;
+            // Argument function
+            let argFn = method.arguments;
+            if (argFn && typeof argFn !== 'function') {
+                if (typeof argFn === 'string') argFn = [argFn];
+                let args = argFn;
+                argFn = function argFn() {
+                    const form = {};
+                    args.forEach((v, i) => form[v] = arguments[i]);
+                    return form;
+                };
+            }
 
-              var form = {};
-              args.forEach(function (v, i) {
-                return form[v] = _arguments[i];
-              });
-              return form;
+            // Options function
+            let optFn = method.options;
+
+            // Create method
+            this.prototype[id] = this.prototype[name] = function () {
+                this.event([id, name], arguments);
+                let form = {},
+                    args = [].slice.call(arguments);
+                let options = args[args.length - 1],
+                    fnOptions = {};
+                if (typeof options !== 'object') options = {};
+                if (argFn) form = argFn.apply(this, args);
+                if (optFn) fnOptions = optFn.apply(this, [].concat(form, options));
+                form = this.properties(form, Object.assign(options, fnOptions));
+                return this.request(`/${id}`, form).then(method.then || (re => re && re.result));
             };
-          })();
         }
-
-        // Options function
-        var optFn = method.options;
-
-        // Create method
-        _this7.prototype[name] = function () {
-          this.event(name, arguments);
-          var form = {},
-              args = [].slice.call(arguments);
-          var options = args[args.length - 1];
-          if ((typeof options === 'undefined' ? 'undefined' : _typeof(options)) != 'object') options = {};
-          if (argFn) form = argFn.apply(this, args);
-          if (optFn) options = optFn.apply(this, [].concat(form, options));
-          form = this.properties(form, options);
-          var request = this.request('/' + id, form);
-          if (method.then) request = request.then(method.then);
-          return request;
-        };
-      };
-
-      for (var id in methods) {
-        var _ret7 = _loop5(id);
-
-        if (_ret7 === 'continue') continue;
-      }
     }
-  }]);
-
-  return TeleBot;
-}();
-
-;
+}
 
 /* Add standard methods */
 
@@ -703,54 +551,30 @@ TeleBot.addMethods(standardMethods);
 /* Functions */
 
 function eventPromiseError(type, fired, error) {
-  var _this8 = this;
-
-  return new Promise(function (resolve, reject) {
-    console.error('[bot.error.event]', error.stack || error);
-    if (type != 'error' && type != 'error.event') {
-      _this8.event(['error', 'error.event'], { error: error, data: fired.data }).then(resolve).catch(reject);
-    } else {
-      resolve();
-    }
-  });
+    return new Promise((resolve, reject) => {
+        console.error('[bot.error.event]', error.stack || error);
+        if (type !== 'error' && type !== 'error.event') {
+            this.event(['error', 'error.event'], { error: error, data: fired.data }).then(resolve).catch(reject);
+        } else {
+            resolve();
+        }
+    });
 }
 
 function extendProps(props, input) {
-  var _iteratorNormalCompletion7 = true;
-  var _didIteratorError7 = false;
-  var _iteratorError7 = undefined;
-
-  try {
-    for (var _iterator7 = input[Symbol.iterator](), _step7; !(_iteratorNormalCompletion7 = (_step7 = _iterator7.next()).done); _iteratorNormalCompletion7 = true) {
-      var obj = _step7.value;
-
-      for (var naprops in obj) {
-        var key = props[naprops],
-            value = obj[naprops];
-        if (key !== undefined) {
-          if (!Array.isArray(key)) props[naprops] = [key];
-          props[naprops].push(value);
-          continue;
+    for (let obj of input) {
+        for (let naprops in obj) {
+            const key = props[naprops],
+                  value = obj[naprops];
+            if (key !== undefined) {
+                if (!Array.isArray(key)) props[naprops] = [key];
+                props[naprops].push(value);
+                continue;
+            }
+            props[naprops] = value;
         }
-        props[naprops] = value;
-      }
     }
-  } catch (err) {
-    _didIteratorError7 = true;
-    _iteratorError7 = err;
-  } finally {
-    try {
-      if (!_iteratorNormalCompletion7 && _iterator7.return) {
-        _iterator7.return();
-      }
-    } finally {
-      if (_didIteratorError7) {
-        throw _iteratorError7;
-      }
-    }
-  }
-
-  return props;
+    return props;
 }
 
 /* Exports */

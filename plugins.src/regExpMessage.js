@@ -1,5 +1,3 @@
-'use strict';
-
 /*
     Adds RegExp support to text event messages.
 */
@@ -8,12 +6,10 @@ module.exports = {
 
     id: 'regExpMessage',
 
-    plugin: function plugin(bot) {
+    plugin(bot) {
 
-        bot.mod('text', data => {
-            const message = data.message,
-                  props = data.props;
-
+        bot.mod('text', (data) => {
+            const {message, props} = data;
             const text = message.text;
 
             let promise = Promise.resolve();
@@ -32,5 +28,7 @@ module.exports = {
 
             return data;
         });
+
     }
+
 };
